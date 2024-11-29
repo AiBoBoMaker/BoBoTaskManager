@@ -1,0 +1,20 @@
+{
+  "AI工作": [
+    {
+      "text": "完成pcb绘制",
+      "completed": false,
+      "date": "2024-11-29 10:50:58",
+      "created_date": "2024-11-29 10:50:58",
+      "completed_date": null
+    },
+    {
+      "text": "新的",
+      "completed": true,
+      "created_date": "2024-11-29 18:39",
+      "completed_date": "2024-11-29 19:38"
+    }
+  ],
+  "硬件": [],
+  "个人": [],
+  "学习": []
+}
