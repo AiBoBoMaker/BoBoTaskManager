@@ -8,6 +8,7 @@ import tkinter.font as tkFont
 from PIL import ImageTk  # 添加 ImageTk 的导入
 import os
 import sys
+import webbrowser
 
 def get_resource_path(relative_path):
     """ 获取资源文件的绝对路径 """
@@ -179,7 +180,7 @@ class CustomMenu(ctk.CTkFrame):
 class TaskManager:
     def __init__(self, root):
         self.root = root
-        self.version = "V0.1"
+        self.version = "V1.2"
         
         # 设置窗口图标
         try:
@@ -208,7 +209,7 @@ class TaskManager:
         self.init_database()
         
         # 设置窗口基本属性
-        self.root.title(f"BoBoMaker 任务清单 {self.version}")
+        self.root.title(f"BoBoMaker 智能清单 {self.version}")
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # 确保窗口已创建
@@ -1527,7 +1528,7 @@ class TaskManager:
 
     def show_help(self):
         self.show_message("使用说明", 
-            "BoBoMaker 智能任务清单使用说明：\n\n"
+            "BoBoMaker 智能清单 使用说明：\n\n"
             "1. 左侧边栏显示任务类别\n"
             "2. 可以添加编辑类别\n"
             "3. 在输入框中输入任务按回车添加\n"
@@ -1538,9 +1539,12 @@ class TaskManager:
 
     def show_about(self):
         self.show_message("关于", 
-            f"BoBoMaker 智能任务清单 {self.version}\n\n"
-            "一个简单而强的任务管工具\n"
-            "帮助您更好地组织和管理日常任务"
+            f"BoBoMaker 智能清单  {self.version}\n\n"
+            "BoBoMaker 是一个极客项目\n"
+            "旨在为大家提供常用软件的开源平替\n"
+            "告别广告和收费，享受纯净体验\n\n"
+            "项目网站：http://writerpanda.cn\n\n"
+            "让我们一起打造更好的软件生态！"
         )
 
     def show_message(self, title, message):
@@ -1549,20 +1553,71 @@ class TaskManager:
         dialog.transient(self.root)
         dialog.grab_set()
         
-        # 先设置大小并居中
-        self.center_window(dialog, 300, 150)
+        # 设置大小并居中
+        self.center_window(dialog, 400, 250)
         
-        # 添消息标签
-        ctk.CTkLabel(dialog, 
-                     text=message,
-                     font=("微软雅黑", 12),
-                     wraplength=250).pack(pady=(20, 20))
+        # 如果消息中包含网址，将消息分成多个部分
+        if "http://" in message or "https://" in message:
+            # 分割消息，找到网址前后的文本
+            parts = message.split("http://")
+            pre_text = parts[0]
+            url_text = "http://" + parts[1].split("\n")[0]
+            post_text = "\n".join(parts[1].split("\n")[1:])
+            
+            # 显示网址前的文本
+            if pre_text:
+                pre_label = ctk.CTkLabel(
+                    dialog,
+                    text=pre_text,
+                    font=("微软雅黑", 12),
+                    wraplength=350,
+                    justify="center"
+                )
+                pre_label.pack(pady=(20, 5))
+            
+            # 显示网址为可点击的链接
+            link_label = ctk.CTkLabel(
+                dialog,
+                text=url_text,
+                font=("微软雅黑", 12),
+                text_color="#4A90E2",
+                cursor="hand2"
+            )
+            link_label.pack(pady=5)
+            link_label.bind("<Button-1>", lambda e: webbrowser.open(url_text))
+            
+            # 显示网址后的文本
+            if post_text:
+                post_label = ctk.CTkLabel(
+                    dialog,
+                    text=post_text,
+                    font=("微软雅黑", 12),
+                    wraplength=350,
+                    justify="center"
+                )
+                post_label.pack(pady=(5, 20))
+        else:
+            # 如果没有网址，直接显示整个消息
+            msg_label = ctk.CTkLabel(
+                dialog, 
+                text=message,
+                font=("微软雅黑", 12),
+                wraplength=350,
+                justify="center"
+            )
+            msg_label.pack(pady=(20, 20))
         
-        # 确定按钮
-        ctk.CTkButton(dialog,
-                      text="确定",
-                      command=dialog.destroy,
-                      width=80).pack(pady=(0, 20))
+        # 确定按钮 - 修改样式
+        ctk.CTkButton(
+            dialog,
+            text="确定",
+            command=dialog.destroy,
+            width=100,  # 增加宽度
+            height=55,  # 增加高度
+            corner_radius=8,  # 设置圆角
+            font=("微软雅黑", 12),  # 设置字体
+            hover_color=self.colors["accent"]  # 设置悬停颜色
+        ).pack(pady=(0, 20))
 
     def show_confirm(self, title, message):
         dialog = ctk.CTkToplevel(self.root)
@@ -2131,7 +2186,7 @@ class TaskManager:
             print(f"Error loading title bar icon: {str(e)}")
         
         # 图标和标题
-        title_text = f"BoBoMaker 智能任务清单 {self.version}"
+        title_text = f"BoBoMaker 智能清单  {self.version}"
         self.title_label = ctk.CTkLabel(self.title_bar,
                           text=title_text,
                           font=("微软雅黑", 12),
