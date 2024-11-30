@@ -1,7 +1,23 @@
-import tkinter as tk
+﻿import tkinter as tk
 import customtkinter as ctk
 import json
 from datetime import datetime
+import sqlite3
+from PIL import Image
+import tkinter.font as tkFont
+from PIL import ImageTk  # 添加 ImageTk 的导入
+import os
+import sys
+
+def get_resource_path(relative_path):
+    """ 获取资源文件的绝对路径 """
+    try:
+        # PyInstaller创建临时文件夹，将路径存储在_MEIPASS中
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    
+    return os.path.join(base_path, relative_path)
 
 class CustomMenu(ctk.CTkFrame):
     def __init__(self, master, text, commands, colors, **kwargs):
@@ -43,7 +59,7 @@ class CustomMenu(ctk.CTkFrame):
             self.dropdown.overrideredirect(True)
             
             # 设置 Toplevel 窗口的背景色
-            self.dropdown.configure(bg=self.colors["sidebar"])  # 设置外层背景色
+            self.dropdown.configure(bg=self.colors["sidebar"])
             
             # 创建下拉菜单框架
             menu_frame = ctk.CTkFrame(
@@ -79,9 +95,9 @@ class CustomMenu(ctk.CTkFrame):
             
             # 设置窗口位置并显示
             self.dropdown.geometry(f"+{x}+{y}")
-            self.dropdown.update_idletasks()  # 确保窗口大小已计算
-            self.dropdown.deiconify()  # 显示窗口
-            self.dropdown.attributes('-topmost', True)  # 确保菜单在最上层
+            self.dropdown.update_idletasks()
+            self.dropdown.deiconify()
+            self.dropdown.attributes('-topmost', True)
             
             # 绑定事件
             self.dropdown.bind("<Leave>", self.on_menu_leave)
@@ -165,12 +181,52 @@ class TaskManager:
         self.root = root
         self.version = "V0.1"
         
+        # 设置窗口图标
+        try:
+            # 加载并转换图标
+            icon_path = get_resource_path("logo.png")
+            icon_image = Image.open(icon_path)
+            # 创建临时ico文件
+            icon_image = icon_image.resize((32, 32))  # Windows图标推荐尺寸
+            
+            # 如果图片是PNG格式且有透明通道，需要确保它有RGBA模式
+            if 'A' not in icon_image.mode:
+                icon_image = icon_image.convert('RGBA')
+            
+            # 保存为临时ico文件
+            icon_image.save("temp_icon.ico", format='ICO', sizes=[(32, 32)])
+            
+            # 设置窗口图标
+            self.root.iconbitmap("temp_icon.ico")
+            
+            # 删除临时文件
+            os.remove("temp_icon.ico")
+        except Exception as e:
+            print(f"Error setting window icon: {str(e)}")
+        
+        # 初始化数据库
+        self.init_database()
+        
         # 设置窗口基本属性
-        self.root.title(f"BoBoMaker 智能任务清单 {self.version}")
+        self.root.title(f"BoBoMaker 任务清单 {self.version}")
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # 确保窗口已创建
         self.root.update_idletasks()
+        
+        # 加载主题图标
+        self.theme_icons = {
+            "light": ctk.CTkImage(
+                light_image=Image.open(get_resource_path("icons/moon.png")),
+                dark_image=Image.open(get_resource_path("icons/moon.png")),
+                size=(20, 20)
+            ),
+            "dark": ctk.CTkImage(
+                light_image=Image.open(get_resource_path("icons/sun.png")),
+                dark_image=Image.open(get_resource_path("icons/sun.png")),
+                size=(20, 20)
+            )
+        }
         
         # 定义展开/收起符号
         self.expand_symbols = {
@@ -192,7 +248,7 @@ class TaskManager:
             WS_THICKFRAME = 0x00040000
             WS_EX_APPWINDOW = 0x00040000
             
-            # 获取当前窗口样式
+            #口样式
             style = windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
             
             # 移除标题栏和边框
@@ -224,8 +280,8 @@ class TaskManager:
                 "bg": "#FFFFFF",           # 纯白背景
                 "sidebar": "#F8F9FA",      # 浅灰边栏
                 "accent": "#4A90E2",       # 柔和的蓝色
-                "text": "#2C3E50",         # 深灰文字
-                "text_secondary": "#95A5A6",# 次要文字
+                "text": "#2C3E50",         # 深颜色的字
+                "text_secondary": "#95A5A6",# 次要文字颜色
                 "border": "#E5E5E5",       # 边框颜色
                 "hover": "#F1F5F9",        # 悬停颜色
                 "completed": "#27AE60",    # 完成状态色
@@ -245,8 +301,8 @@ class TaskManager:
                 "hover": "#3E3E42",        # 深色悬停
                 "completed": "#2ECC71",    # 亮色完成状态
                 "uncompleted": "#2D2D30",  # 深色未完成状态
-                "titlebar": "#252526",     # 更深的标题栏背景色
-                "menubar": "#252526",      # 菜单栏背景色
+                "titlebar": "#252526",     # 更深的标题背景色
+                "menubar": "#252526",      # 菜单背景色
                 "container": "#252526",    # 容器背色
                 "selected": "#2D3748"      # 选中项背景色
             }
@@ -281,6 +337,60 @@ class TaskManager:
         # 初始化界面
         self.setup_gui()
         self.load_tasks()
+        
+        # 添加窗口停靠相关的属性
+        self.is_docked = False
+        self.is_dragging = False  # 添加拖动状态标志
+        self.dock_timer = None
+        self.hide_timer = None
+        self.show_timer = None
+        self.dock_height = 5  # 隐藏时露出的高度
+        self.dock_width = 350  # 使用固定的停靠宽度
+        self.original_geometry = None  # 保存原始位置和大小
+        
+        # 绑定鼠标进入和离开事件
+        self.root.bind("<Enter>", self.on_mouse_enter)
+        self.root.bind("<Leave>", self.on_mouse_leave)
+
+    def init_database(self):
+        """初始化数据库"""
+        try:
+            self.conn = sqlite3.connect('bobomaker.db')
+            self.cursor = self.conn.cursor()
+            
+            # 创建类别表
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS categories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    position INTEGER NOT NULL
+                )
+            ''')
+            
+            # 创建任务表
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category_id INTEGER,
+                    text TEXT NOT NULL,
+                    completed BOOLEAN NOT NULL DEFAULT 0,
+                    created_date TEXT NOT NULL,
+                    completed_date TEXT,
+                    FOREIGN KEY (category_id) REFERENCES categories (id)
+                )
+            ''')
+            
+            # 创建设置表
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            ''')
+            
+            self.conn.commit()
+        except Exception as e:
+            print(f"Database initialization error: {str(e)}")
 
     def setup_gui(self):
         # 主容器
@@ -296,21 +406,47 @@ class TaskManager:
         
         # 左侧面板
         self.sidebar = ctk.CTkFrame(main_content, 
-                                   width=120,
+                                   width=120,  # 设置固定的初始宽度
                                    fg_color=self.colors["sidebar"],
                                    border_width=1,
                                    border_color=self.colors["border"])
         self.sidebar.pack(side="left", fill="y", padx=(0, 5))
         self.sidebar.pack_propagate(False)
         
+        # 初始化侧边栏状态
+        self.is_animating = False
+        self.is_expanded = True
+        self.sidebar_width = 120
+        self.max_width = 120  # 在这里初始化 max_width
+        self.animation_id = None
+        
+        # 创建标题栏框架并保存引用
+        self.title_bar_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        self.title_bar_frame.pack(fill="x", pady=(15, 10))
+        
         # 类别标题
-        self.category_title = ctk.CTkLabel(  # 保存为实例变量以便后续更新
-            self.sidebar,
+        self.category_title = ctk.CTkLabel(
+            self.title_bar_frame,
             text="任务类别",
-            text_color=self.colors["text"],  # 使用主题文字颜色
+            text_color=self.colors["text"],
             font=("微软雅黑", 13)
         )
-        self.category_title.pack(pady=(15, 10))
+        self.category_title.pack(side="left", padx=10)
+        
+        # 添加展开/收起按钮
+        self.sidebar_toggle_btn = ctk.CTkButton(
+            self.title_bar_frame,
+            text="◀",  # 使用左箭头表示可以收起
+            width=20,
+            height=20,
+            corner_radius=5,
+            fg_color="transparent",
+            text_color=self.colors["text"],
+            hover_color=self.colors["hover"],
+            font=("微软雅黑", 12),
+            command=self.toggle_sidebar
+        )
+        self.sidebar_toggle_btn.pack(side="right", padx=5)
         
         # 类别列表
         self.category_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
@@ -328,7 +464,7 @@ class TaskManager:
                                height=28,
                                font=("微软雅黑", 11))
             btn.pack(fill="x", pady=2)
-            # 绑定键菜单和
+            # 绑定菜单和按钮事件
             btn.bind("<Button-3>", lambda e, c=category: self.show_category_menu(e, c))
             btn.bind("<Button-1>", lambda e, b=btn, c=category: self.on_button_press(e, b, c))
             btn.bind("<B1-Motion>", self.on_drag_motion)
@@ -361,7 +497,7 @@ class TaskManager:
                                                 fg_color=self.colors["bg"])  # 改用主背景色
         self.task_scroll.pack(fill="both", expand=True, padx=20)
         
-        # 任务详情面板（初始隐）
+        # 任务详情面板初始隐藏
         self.detail_frame = ctk.CTkFrame(self.right_pane, 
                                        fg_color=self.colors["sidebar"],
                                        width=300)
@@ -389,20 +525,62 @@ class TaskManager:
             self.update_category_list()
 
     def add_task(self, event=None):
+        """添加新任务"""
         task_text = self.task_entry.get().strip()
         if task_text:
-            task = {
-                "text": task_text,
-                "completed": False,
-                "created_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "completed_date": None
-            }
-            self.categories[self.current_category].append(task)
-            self.task_entry.delete(0, "end")
-            self.update_task_list()
-            self.save_tasks()
-            self.update_category_list()
-    
+            try:
+                # 创建新任务
+                task = {
+                    "text": task_text,
+                    "completed": False,
+                    "created_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "completed_date": None
+                }
+                
+                # 添加到当前类别
+                if self.current_category not in self.categories:
+                    self.categories[self.current_category] = []
+                self.categories[self.current_category].append(task)
+                
+                # 清空输入框
+                self.task_entry.delete(0, "end")
+                
+                # 保存到数据库
+                try:
+                    # 获取类别ID
+                    self.cursor.execute('SELECT id FROM categories WHERE name = ?', 
+                                      (self.current_category,))
+                    category_id = self.cursor.fetchone()
+                    
+                    if category_id is None:
+                        # 如果类别不存在，先创建类别
+                        self.cursor.execute('''
+                            INSERT INTO categories (name, position) 
+                            VALUES (?, (SELECT COALESCE(MAX(position), 0) + 1 FROM categories))
+                        ''', (self.current_category,))
+                        category_id = self.cursor.lastrowid
+                    else:
+                        category_id = category_id[0]
+                    
+                    # 插入任务
+                    self.cursor.execute('''
+                        INSERT INTO tasks (category_id, text, completed, created_date, completed_date)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (category_id, task["text"], task["completed"], 
+                         task["created_date"], task["completed_date"]))
+                    
+                    self.conn.commit()
+                except Exception as e:
+                    print(f"Error saving task to database: {str(e)}")
+                    self.conn.rollback()
+                
+                # 更新显示
+                self.update_task_list()
+                self.update_category_list()
+                
+            except Exception as e:
+                print(f"Error adding task: {str(e)}")
+
     def update_task_list(self):
         # 清除现有任务
         for widget in self.task_scroll.winfo_children():
@@ -439,53 +617,117 @@ class TaskManager:
                             hover_color=self.colors["hover"])
 
     def save_tasks(self):
-        with open("tasks.json", "w", encoding="utf-8") as f:
-            json.dump(self.categories, f, ensure_ascii=False, indent=2)
-            
-    def load_tasks(self):
+        """保存任务到数据库"""
         try:
-            with open("tasks.json", "r", encoding="utf-8") as f:
-                loaded_categories = json.load(f)
-                # 更新任务数据格式
-                for category, tasks in loaded_categories.items():
-                    for task in tasks:
-                        # 如果是旧格式的任务数据，添加新的字段
-                        if "created_date" not in task:
-                            task["created_date"] = task.get("date", datetime.now().strftime("%Y-%m-%d %H:%M"))
-                        if "completed_date" not in task:
-                            task["completed_date"] = task["created_date"] if task["completed"] else None
-                self.categories = loaded_categories
+            # 开始事务
+            self.cursor.execute('BEGIN TRANSACTION')
+            
+            # 清空现有数据
+            self.cursor.execute('DELETE FROM tasks')
+            self.cursor.execute('DELETE FROM categories')
+            
+            # 保存类别和任务
+            for position, (category_name, tasks) in enumerate(self.categories.items()):
+                # 插入类别（只插入一次）
+                self.cursor.execute(
+                    'INSERT INTO categories (name, position) VALUES (?, ?)',
+                    (category_name, position)
+                )
+                category_id = self.cursor.lastrowid
                 
-                # 如果当前类别不存在择第一个可用的别
-                if self.current_category not in self.categories:
-                    self.current_category = next(iter(self.categories)) if self.categories else "工作"
-                    
-                # 如果没有任何类别，创建默认类别
-                if not self.categories:
-                    self.categories = {
-                        "工作": [],
-                        "个人": [],
-                        "学习": [],
-                        "其他": []
-                    }
-                    self.current_category = "工作"
-                    
-        except FileNotFoundError:
-            # 如果件不存在，用默认类别
+                # 保存该类别下的所有任务
+                for task in tasks:
+                    self.cursor.execute('''
+                        INSERT INTO tasks (
+                            category_id, text, completed, 
+                            created_date, completed_date
+                        ) VALUES (?, ?, ?, ?, ?)
+                    ''', (
+                        category_id,
+                        task['text'],
+                        1 if task['completed'] else 0,  # 确保布尔值正确保存
+                        task['created_date'],
+                        task['completed_date']
+                    ))
+            
+            # 提交事务
+            self.conn.commit()
+        except Exception as e:
+            print(f"Error saving tasks: {str(e)}")
+            self.conn.rollback()
+
+    def load_tasks(self):
+        """从数据库加载任务"""
+        try:
+            # 清空现有数据
+            self.categories = {}
+            
+            # 加载所有类别
+            self.cursor.execute('''
+                SELECT id, name, position FROM categories 
+                ORDER BY position
+            ''')
+            categories = self.cursor.fetchall()
+            
+            # 如果没有类别，创建默认类别
+            if not categories:
+                default_categories = ["工作", "个人", "学习", "其他"]
+                for i, category in enumerate(default_categories):
+                    self.cursor.execute('''
+                        INSERT INTO categories (name, position) VALUES (?, ?)
+                    ''', (category, i))
+                self.conn.commit()
+                
+                # 重新加载类别
+                self.cursor.execute('''
+                    SELECT id, name, position FROM categories 
+                    ORDER BY position
+                ''')
+                categories = self.cursor.fetchall()
+            
+            # 初始化类别字典
+            for category_id, category_name, _ in categories:
+                self.categories[category_name] = []
+                
+                # 加载该类别的所有任务
+                self.cursor.execute('''
+                    SELECT text, completed, created_date, completed_date 
+                    FROM tasks 
+                    WHERE category_id = ?
+                ''', (category_id,))
+                
+                tasks = self.cursor.fetchall()
+                for task_data in tasks:
+                    self.categories[category_name].append({
+                        'text': task_data[0],
+                        'completed': bool(task_data[1]),
+                        'created_date': task_data[2],
+                        'completed_date': task_data[3]
+                    })
+            
+            # 设置当前类别
+            if not self.current_category or self.current_category not in self.categories:
+                self.current_category = next(iter(self.categories))
+            
+            # 更新显示
+            self.update_category_list()
+            self.update_task_list()
+            
+        except Exception as e:
+            print(f"Error loading tasks: {str(e)}")
+            # 使用默认类别
             self.categories = {
                 "工作": [],
-                "人": [],
+                "个人": [],
                 "学习": [],
                 "其他": []
             }
             self.current_category = "工作"
+            self.update_category_list()
+            self.update_task_list()
         
         # 重新创建所有类别按钮
         self.repack_category_buttons()
-        
-        # 更新显示
-        self.update_category_list()
-        self.update_task_list()
         
     def add_category(self):
         dialog = ctk.CTkInputDialog(text="输入新类别名称:",
@@ -519,12 +761,12 @@ class TaskManager:
         # 设置大小并居中
         self.center_window(dialog, 400, 180)
         
-        # 添加说明标签
+        # 类别名称标签
         ctk.CTkLabel(dialog, 
                      text="输入新的类别名称:",
                      font=("微软雅黑", 12)).pack(pady=(15, 5))
         
-        # 创输入框并预填充当前类别名称
+        # 创建输入框并预填充当前类别名称
         entry = ctk.CTkEntry(dialog, width=350)
         entry.pack(padx=20, pady=5)
         entry.insert(0, self.current_category)  # 预填充当前类别名称
@@ -543,7 +785,7 @@ class TaskManager:
                 # 重建类别字典，保持顺序
                 self.categories = dict(categories)
                 
-                # 更新当前选中的类别
+                # 更新当前选中类别
                 if self.current_category == self.current_category:
                     self.current_category = new_name
                 
@@ -556,7 +798,7 @@ class TaskManager:
         button_frame = ctk.CTkFrame(dialog, fg_color="transparent")
         button_frame.pack(fill="x", padx=20, pady=(10, 15))
         
-        # 按钮容器，用于居中显示按钮
+        # 按钮器，于居中显示钮
         buttons_container = ctk.CTkFrame(button_frame, fg_color="transparent")
         buttons_container.pack(expand=True)
         
@@ -573,16 +815,40 @@ class TaskManager:
                       width=80).pack(side="left", padx=10)
 
     def toggle_task(self, task_index):
-        task = self.categories[self.current_category][task_index]
-        task["completed"] = not task["completed"]
-        if task["completed"]:
-            task["completed_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-        else:
-            task["completed_date"] = None
-        self.update_task_list()
-        self.save_tasks()
-        self.update_category_list()
-        
+        """切换任务状态"""
+        try:
+            # 获取当前类别的所有任务
+            tasks = self.categories[self.current_category]
+            
+            # 确保任务索引有效
+            if 0 <= task_index < len(tasks):
+                task = tasks[task_index]
+                # 切换状态
+                task["completed"] = not task["completed"]
+                
+                # 更新完成时间
+                if task["completed"]:
+                    task["completed_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                else:
+                    task["completed_date"] = None
+                
+                # 保存更改
+                self.save_tasks()
+                
+                # 更新显示
+                self.update_task_list()
+                self.update_category_list()
+                
+                # 如果有详情面板打开，也需要更新它
+                if (hasattr(self, 'detail_frame') and 
+                    hasattr(self, 'current_detail_task') and 
+                    self.detail_frame.winfo_exists() and 
+                    self.current_detail_task == task):
+                    self.hide_task_details()
+                    
+        except Exception as e:
+            print(f"Error toggling task: {str(e)}")
+
     def create_task_section(self, title, tasks, is_completed=False):
         # 创建分组框架
         section_frame = ctk.CTkFrame(self.task_scroll, 
@@ -626,158 +892,133 @@ class TaskManager:
         for i, task in enumerate(tasks):
             # 任务容器
             task_frame = ctk.CTkFrame(tasks_frame, 
-                                     fg_color="transparent",
-                                     height=45)  # 增加高度从40到45
-            task_frame.pack(fill="x", pady=(0, 8))  # 增加任务间距
-            task_frame.pack_propagate(False)
+                                     fg_color="transparent")
+            task_frame.pack(fill="x", pady=(0, 8))
             
             # 任务内容容器
             content_frame = ctk.CTkFrame(task_frame,
-                                       fg_color=self.colors["sidebar"],  # 改用 sidebar 颜色而不是 bg
+                                       fg_color=self.colors["sidebar"],
                                        border_width=1,
                                        border_color=self.colors["border"])
-            content_frame.pack(fill="both", padx=(25, 0))  # 添加左侧缩进
+            content_frame.pack(fill="x", padx=(25, 0))
             
-            # 任状态指示条
+            # 任务状态指示条
             status_bar = ctk.CTkFrame(content_frame,
                                     width=3,
+                                    height=28,  # 设置固定高度
                                     fg_color=self.colors["accent"] if not task["completed"] else "#999999")
-            status_bar.pack(side="left", fill="y")
+            status_bar.pack(side="left")  # 移除 fill="y"
+            status_bar.pack_propagate(False)  # 保持固定大小
             
             # 复选框
             checkbox = ctk.CTkCheckBox(content_frame,
                                     text="",
-                                    command=lambda i=i, completed=is_completed: 
-                                        self.toggle_task(self.get_task_index(i, completed)),
-                                    width=15,                    # 设置宽度为15
-                                    height=15,                   # 设置高度15
-                                    border_width=1,              # 保持框宽度为1
-                                    corner_radius=7.5,           # 设置圆角半径为宽度的一半
+                                    width=15,
+                                    height=15,
+                                    border_width=1,
+                                    corner_radius=7.5,
                                     border_color=self.colors["border"] if not task["completed"] else self.colors["accent"],
                                     fg_color=self.colors["accent"],
                                     hover_color=self.colors["accent"],
-                                    checkmark_color="white",     # 设置选标记颜色
-                                    checkbox_width=15,           # 设置复选框宽度为15
-                                    checkbox_height=15)          # 设置复选框高度为15
-            checkbox.pack(side="left", padx=(10, 5), pady=5)
-            checkbox.select() if task["completed"] else checkbox.deselect()
+                                    checkmark_color="white",
+                                    checkbox_width=15,
+                                    checkbox_height=15)
+            checkbox.pack(side="left", padx=(10, 5))
             
-            # 任务信息容器
-            info_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
-            info_frame.pack(side="left", fill="both", expand=True, padx=(5, 10), pady=5)
+            # 设置初始状态
+            if task["completed"]:
+                checkbox.select()
+            else:
+                checkbox.deselect()
             
-            # 任务文本容器（于放置文本和删除线）
-            text_container = ctk.CTkFrame(info_frame, fg_color="transparent")
-            text_container.pack(side="top", fill="x")
+            # 获取任务在原始列表中的索引
+            original_index = self.categories[self.current_category].index(task)
+            
+            # 绑定命令
+            checkbox.configure(command=lambda idx=original_index: self.toggle_task(idx))
+            
+            # 计算可用宽度
+            available_width = content_frame.winfo_width() - 60  # 减去状态条、复选框和内边距的宽度
+            
+            # 使用 CTkFont 而不是 tkFont
+            task_font = ctk.CTkFont(
+                family="微软雅黑",
+                size=14,
+                slant="roman"
+            )
             
             # 任务文本
-            label = ctk.CTkLabel(text_container,
-                                text=task["text"],
-                                font=("微软雅黑", 14),
+            text = task["text"]
+            if task["completed"]:
+                # 方法1：使用双重删除线
+                text = ''.join([char + '\u0336\u0336' for char in text])
+                
+                # 或者方法2：使用粗删除线字符
+                # text = ''.join([char + '\u0335' for char in text])  # \u0335 是一个更粗的删除线字符
+            
+            # 任务文本标签
+            label = ctk.CTkLabel(content_frame,
+                                text=text,
+                                font=task_font,
                                 text_color="#AAAAAA" if task["completed"] else self.colors["text"],
-                                wraplength=220,
+                                wraplength=400,  # 先设置一个初始值
                                 justify="left",
                                 anchor="w")
-            label.pack(fill="x", padx=10, pady=5)  # 调整内边距从10到5
+            label.pack(side="left", 
+                      fill="x",
+                      expand=True,  # 改回 True，让标签能够占据可用空间
+                      padx=(5, 10),
+                      pady=(4, 4))
             
-            # 加删除线效果
-            if task["completed"]:
-                # 等待标签渲染完成后添加删除线
-                def add_strike_line():
-                    # 获取文本标签的实际宽度
-                    label.update_idletasks()  # 确保标签已完全渲染
-                    
-                    # 计算文本宽度（使用字符数估算）
-                    text_width = len(task["text"]) * 14  # 每个字符大约14像素宽（根据字体大小）
-                    
-                    # 创建删除线
-                    strike_line = ctk.CTkFrame(
-                        text_container,
-                        height=2,  # 删除线高度
-                        width=text_width,  # 使用估算的文本宽度
-                        fg_color="#808080" if self.theme_mode == "dark" else "#AAAAAA"
-                    )
-                    
-                    # 计算删除线位置
-                    label_height = label.winfo_height()
-                    y_position = (label_height - 2) // 2  # 垂直居中
-                    
-                    # 放置删除线，与文本左对齐
-                    strike_line.place(x=10, y=y_position)
-                    strike_line.lift()  # 确保删除线在最上层
-                
-                # 延迟添加删除线，确保文本标签已完全渲染
-                label.after(50, add_strike_line)
+            def update_wraplength(label=label, content_frame=content_frame):
+                try:
+                    # 计算实际可用宽度
+                    content_width = content_frame.winfo_width()
+                    if content_width > 0:
+                        # 减去左侧状态条、复选框和内边距的宽度
+                        available_width = content_width - 60
+                        if available_width > 0:
+                            label.configure(wraplength=available_width)
+                            # 强制更新布局
+                            label.update_idletasks()
+                            content_frame.update_idletasks()
+                    # 删除这行，不要再次调度更新
+                    # label.after(100, lambda: update_wraplength(label, content_frame))
+                except Exception as e:
+                    print(f"Error updating wraplength: {str(e)}")
             
-            # 任务时间和其他信息
-            time_text = f"创建于 {task['created_date'].split(' ')[0]}"
-            if task["completed"] and task["completed_date"]:
-                time_text += f" · 完于 {task['completed_date'].split(' ')[0]}"
+            # 绑定大小变化事件
+            content_frame.bind('<Configure>', lambda e, l=label, c=content_frame: update_wraplength(l, c))
             
-            time_label = ctk.CTkLabel(info_frame,
-                                    text=time_text,
-                                    font=("微软雅黑", 10),
-                                    text_color=self.colors["text_secondary"],
-                                    anchor="w")
-            time_label.pack(side="top", fill="x", pady=(2, 0))
+            # 立即调用一次更新
+            self.root.after(10, lambda: update_wraplength(label, content_frame))
             
             # 绑定事件
-            for widget in [content_frame, label, info_frame]:
+            for widget in [content_frame, label]:
                 widget.bind("<Button-1>", lambda e, t=task, f=task_frame: self.show_task_details(t, f))
                 widget.bind("<Button-3>", lambda e, t=task, i=i: self.show_task_menu(e, t, i))
 
     def toggle_section(self, button, content_frame):
-        """处理任务分组的展开/收起，带动画效果"""
+        """处理任务分组的展开/收起"""
         is_expanded = button.cget("text") == self.expand_symbols["expanded"]
         
+        # 临时解绑 Configure 事件，避免触发不必要的更新
+        for widget in content_frame.winfo_children():
+            if isinstance(widget, ctk.CTkLabel):
+                widget.unbind('<Configure>')
+        
         if is_expanded:  # 当前是展开状态，需要收起
-            # 保存当前高度
-            current_height = content_frame.winfo_height()
-            
-            # 创建动画效果
-            def animate_collapse(height):
-                if height > 0:
-                    # 设置新高度
-                    content_frame.configure(height=height)
-                    # 继续动画
-                    self.root.after(10, lambda: animate_collapse(height - 20))
-                else:
-                    # 动画结束，隐藏内容
-                    content_frame.pack_forget()
-                    content_frame.configure(height=0)  # 设置为0而不是空字符串
-                    button.configure(text=self.expand_symbols["collapsed"])
-            
-            # 开始收起动画
-            content_frame.pack_propagate(False)
-            animate_collapse(current_height)
-            
+            content_frame.pack_forget()
+            button.configure(text=self.expand_symbols["collapsed"])
         else:  # 当前是收起状态，需要展开
-            # 先显示内容，但高度为0
             content_frame.pack(fill="x", pady=(5, 0))
-            content_frame.pack_propagate(False)
-            content_frame.configure(height=0)
-            content_frame.update()
-            
-            # 临时设置为自然高度来获取所需高度
-            content_frame.pack_propagate(True)
-            natural_height = content_frame.winfo_reqheight()
-            content_frame.pack_propagate(False)
-            
-            # 创建动画效果
-            def animate_expand(height):
-                if height < natural_height:
-                    # 设置新高度
-                    content_frame.configure(height=height)
-                    # 继续动画
-                    self.root.after(10, lambda: animate_expand(height + 20))
-                else:
-                    # 动画结束，恢复自然高度
-                    content_frame.pack_propagate(True)
-                    content_frame.configure(height=natural_height)  # 设置最终高度
-                    button.configure(text=self.expand_symbols["expanded"])
-            
-            # 开始展开动画
-            animate_expand(0)
+            button.configure(text=self.expand_symbols["expanded"])
+        
+        # 完成后重新绑定事件
+        for widget in content_frame.winfo_children():
+            if isinstance(widget, ctk.CTkLabel):
+                widget.bind('<Configure>', 
+                           lambda e, l=widget, c=content_frame: self.update_wraplength(l, c))
 
     def get_task_index(self, section_index, is_completed):
         # 获取任在原始列表中的索引
@@ -798,7 +1039,6 @@ class TaskManager:
             hasattr(self, 'current_detail_task') and 
             self.detail_frame.winfo_exists() and 
             self.current_detail_task == task):
-            # 如果是当前任务，则关闭详情面板
             self.hide_task_details()
             return
         
@@ -809,10 +1049,10 @@ class TaskManager:
         # 取消之前选中的任务的高亮
         if hasattr(self, 'last_selected_frame') and self.last_selected_frame:
             try:
-                if self.last_selected_frame.winfo_exists():  # 检查框架是否仍然存在
+                if self.last_selected_frame.winfo_exists():
                     self.last_selected_frame.configure(fg_color="transparent")
             except Exception:
-                pass  # 如果框架不存在，忽略错误
+                pass
         
         # 高亮当前选中的任务
         self.last_selected_frame = task_frame
@@ -821,91 +1061,191 @@ class TaskManager:
         # 保存当前显示的任务
         self.current_detail_task = task
         
-        # 创建新的详情面板
+        # 创建详情面板
         self.detail_frame = ctk.CTkFrame(self.right_pane, 
-                                       fg_color=self.colors["sidebar"],
-                                       width=300)
+                                   fg_color=self.colors["sidebar"],
+                                   width=300)
         
-        # 详情标题和关闭按钮容器
-        title_frame = ctk.CTkFrame(self.detail_frame, fg_color="transparent")
-        title_frame.pack(fill="x", padx=20, pady=(20,10))
+        # 内容区域
+        content_frame = ctk.CTkFrame(self.detail_frame, fg_color="transparent")
+        content_frame.pack(fill="both", expand=True, padx=20, pady=20)
         
-        # 标题文字
-        ctk.CTkLabel(title_frame,
-                    text="任务详情",
-                    text_color=self.colors["text"],
-                    font=("微软雅黑", 16, "bold")).pack(side="left")
+        # 顶部任务状态和内容
+        header_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+        header_frame.pack(fill="x", pady=(0, 20))
         
-        # 关闭按钮
-        close_btn = ctk.CTkButton(title_frame,
-                                text="×",
-                                width=20,
-                                height=20,
-                                command=self.hide_task_details,
-                                fg_color="transparent",
-                                text_color=self.colors["text"],
-                                hover_color=self.colors["hover"],
-                                font=("微软雅", 14))
-        close_btn.pack(side="right")
+        # 复选框
+        def on_checkbox_click():
+            # 获取任务在列表中的索引
+            tasks = self.categories[self.current_category]
+            task_index = tasks.index(task)
+            # 切换任务状态
+            self.toggle_task(task_index)
+            # 更新任务列表
+            self.update_task_list()
+            # 关闭详情面板
+            self.hide_task_details()
         
-        # 创建可滚动的内容区域
-        content_scroll = ctk.CTkScrollableFrame(self.detail_frame, 
-                                          fg_color="transparent")
-        content_scroll.pack(fill="both", expand=True, padx=20)
+        checkbox = ctk.CTkCheckBox(header_frame,
+                                  text="",
+                                  command=on_checkbox_click,
+                                  width=15,
+                                  height=15,
+                                  border_width=1,
+                                  corner_radius=7.5,
+                                  border_color=self.colors["border"] if not task["completed"] else self.colors["accent"],
+                                  fg_color=self.colors["accent"],
+                                  hover_color=self.colors["accent"],
+                                  checkmark_color="white",
+                                  checkbox_width=15,
+                                  checkbox_height=15)
+        checkbox.pack(side="left", anchor="n", pady=3)
+        if task["completed"]:
+            checkbox.select()
         
-        # 任务内容标签
-        ctk.CTkLabel(content_scroll,
-                    text="任务内容",
-                    text_color=self.colors["text"],
-                    font=("微软雅黑", 12, "bold")).pack(anchor="w", pady=(10,5))
+        # 任务内容容器
+        content_container = ctk.CTkFrame(header_frame, fg_color="transparent")
+        content_container.pack(side="left", fill="x", expand=True, padx=(10, 0))
         
-        # 创建任务内容容器
-        content_container = ctk.CTkFrame(content_scroll, 
-                                       fg_color=self.colors["bg"],  # 使用主背景色
-                                       border_width=1,
-                                       border_color=self.colors["border"])
-        content_container.pack(fill="x", pady=(0,15))
+        # 任务内容标签（默认显示）
+        self.content_label = ctk.CTkLabel(
+            content_container,
+            text=task["text"],
+            text_color=self.colors["text"],
+            font=("微软雅黑", 14, "bold"),
+            wraplength=250,
+            justify="left",
+            anchor="w",
+            cursor="hand2"  # 显示手型光标表示可点击
+        )
+        self.content_label.pack(fill="x")
         
-        # 任务内容文本（使用自动换行）
-        content_label = ctk.CTkLabel(content_container,
-                                   text=task["text"],
+        # 任务内容输入框（初始隐藏）
+        self.content_entry = ctk.CTkTextbox(
+            content_container,
+            text_color=self.colors["text"],
+            font=("微软雅黑", 14, "bold"),
+            fg_color="transparent",
+            border_width=0,
+            height=100,  # 设置适当的高度
+            width=250
+        )
+        self.content_entry.insert("1.0", task["text"])
+
+        def start_edit(event=None):
+            # 隐藏标签，显示输入框
+            self.content_label.pack_forget()
+            self.content_entry.pack(fill="x", expand=True)  # 添加 expand=True 使文本框可以扩展
+            self.content_entry.focus()
+            return "break"  # 阻止事件继续传播
+        
+        def save_edit(event=None):
+            new_text = self.content_entry.get("1.0", "end-1c").strip()  # 获取文本框的所有内容
+            if new_text and new_text != task["text"]:
+                # 获取任务在列表中的索引
+                tasks = self.categories[self.current_category]
+                task_index = tasks.index(task)
+                # 更新任务文本
+                task["text"] = new_text
+                # 更新标签文本
+                self.content_label.configure(text=new_text)
+                # 保存更改
+                self.save_tasks()
+                # 更新任务列表显示
+                self.update_task_list()
+                # 更新类别列表（如果需要）
+                self.update_category_list()
+            
+            # 隐藏输入框，显示标签
+            self.content_entry.pack_forget()
+            self.content_label.pack(fill="x")
+            return "break"
+        
+        def cancel_edit(event=None):
+            # 取消编辑，恢复原文本
+            self.content_entry.pack_forget()
+            self.content_label.pack(fill="x")
+            return "break"
+        
+        # 绑事件
+        self.content_label.bind("<Button-1>", start_edit)  # 点击开始编辑
+        self.content_entry.bind("<Return>", save_edit)     # 回车保存
+        self.content_entry.bind("<FocusOut>", save_edit)   # 失去焦点时保存
+        self.content_entry.bind("<Escape>", cancel_edit)   # ESC取消编辑
+        
+        # 任务信息
+        info_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+        info_frame.pack(fill="x", pady=(0, 10))
+        
+        # 所属清单
+        list_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
+        list_frame.pack(fill="x", pady=(0, 15))
+        list_label = ctk.CTkLabel(list_frame,
+                                 text="所属清单",
+                                 text_color=self.colors["text_secondary"],
+                                 font=("微软雅黑", 12))
+        list_label.pack(side="left", padx=(0, 15))
+        list_value = ctk.CTkLabel(list_frame,
+                                 text=self.current_category,
+                                 text_color=self.colors["text"],
+                                 font=("微软雅黑", 12))
+        list_value.pack(side="left")
+        
+        # 创建时间
+        create_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
+        create_frame.pack(fill="x", pady=(0, 15))
+        create_label = ctk.CTkLabel(create_frame,
+                                   text="创建时间",
+                                   text_color=self.colors["text_secondary"],
+                                   font=("微软雅黑", 12))
+        create_label.pack(side="left", padx=(0, 15))
+        create_value = ctk.CTkLabel(create_frame,
+                                   text=task["created_date"],
                                    text_color=self.colors["text"],
-                                   font=("微软雅黑", 12),
-                                   wraplength=220,  # 设置文本自动换行宽度
-                                   justify="left",   # 左对齐
-                                   anchor="w")       # 文本左对齐
-        content_label.pack(fill="x", padx=10, pady=10)  # 添加内边距
+                                   font=("微软雅黑", 12))
+        create_value.pack(side="left")
         
-        # 所属类别标签
-        ctk.CTkLabel(content_scroll,
-                    text="所属类别",
-                    text_color=self.colors["text"],
-                    font=("微软雅黑", 12, "bold")).pack(anchor="w", pady=(10,5))
-        ctk.CTkLabel(content_scroll,
-                    text=self.current_category,
-                    text_color=self.colors["text"],
-                    font=("微软雅黑", 12)).pack(anchor="w", pady=(0,10))
-        
-        # 创建时间标签
-        ctk.CTkLabel(content_scroll,
-                    text="创建时间",
-                    text_color=self.colors["text"],
-                    font=("微软雅黑", 12, "bold")).pack(anchor="w", pady=(10,5))
-        ctk.CTkLabel(content_scroll,
-                    text=task["created_date"],
-                    text_color=self.colors["text"],
-                    font=("微软雅黑", 12)).pack(anchor="w", pady=(0,10))
-        
-        # 完成时间标签
-        ctk.CTkLabel(content_scroll,
-                    text="完成时间",
-                    text_color=self.colors["text"],
-                    font=("微软雅黑", 12, "bold")).pack(anchor="w", pady=(10,5))
+        # 完成时间
+        complete_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
+        complete_frame.pack(fill="x")
+        complete_label = ctk.CTkLabel(complete_frame,
+                                     text="完成时间",
+                                     text_color=self.colors["text_secondary"],
+                                     font=("微软雅黑", 12))
+        complete_label.pack(side="left", padx=(0, 15))
         completion_text = task["completed_date"] if task["completed"] else "未完成"
-        ctk.CTkLabel(content_scroll,
-                    text=completion_text,
-                    text_color=self.colors["text"],
-                    font=("微软雅黑", 12)).pack(anchor="w", pady=(0,10))
+        complete_value = ctk.CTkLabel(complete_frame,
+                                     text=completion_text,
+                                     text_color=self.colors["text"],
+                                     font=("微软雅黑", 12))
+        complete_value.pack(side="left")
+        
+        # 修改点击外部区域关闭详情的逻辑
+        def on_click_outside(event):
+            try:
+                # 确保详情面板还存在
+                if not hasattr(self, 'detail_frame') or not self.detail_frame.winfo_exists():
+                    self.root.unbind_all("<Button-1>")
+                    return
+                
+                # 获取点击位置相对于详情面板的坐标
+                x = event.x_root - self.detail_frame.winfo_rootx()
+                y = event.y_root - self.detail_frame.winfo_rooty()
+                
+                # 检查点击是否在详情面板外
+                if not (0 <= x <= self.detail_frame.winfo_width() and 
+                        0 <= y <= self.detail_frame.winfo_height()):
+                    self.hide_task_details()
+                    # 解绑点击事件
+                    self.root.unbind_all("<Button-1>")
+            except Exception as e:
+                # 如果发生错误，安全地关闭详情面板
+                if hasattr(self, 'detail_frame') and self.detail_frame.winfo_exists():
+                    self.hide_task_details()
+                self.root.unbind_all("<Button-1>")
+        
+        # 绑定点击事件
+        self.root.bind_all("<Button-1>", on_click_outside)
         
         # 详情面板
         self.detail_frame.pack(side="left", fill="y", padx=(10,0))
@@ -920,9 +1260,12 @@ class TaskManager:
                     self.last_selected_frame.configure(fg_color="transparent")
             except Exception:
                 pass
-        # 清除���前显示的任务记录
+        # 清除当前显示的任务记录
         if hasattr(self, 'current_detail_task'):
             del self.current_detail_task
+        
+        # 解绑点击事件
+        self.root.unbind_all("<Button-1>")
 
     # 添加创建菜单的方法
     def create_menu(self):
@@ -951,7 +1294,7 @@ class TaskManager:
         tools_menu.add_separator()
         tools_menu.add_command(label="清理已完成", command=self.clear_completed)
         
-        # 帮助单
+        # 帮助菜单
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="帮助", menu=help_menu)
         help_menu.add_command(label="使用说明", command=self.show_help)
@@ -960,30 +1303,23 @@ class TaskManager:
     # 添加菜单功能对应的方法
     def toggle_theme(self):
         """切换主题并更新所有组件的颜色"""
-        # 切换主题式
+        # 切换主题模式
         self.theme_mode = "dark" if self.theme_mode == "light" else "light"
         
-        # 先更新颜色方案
+        # 更新颜色方案
         self.colors = self.theme_colors[self.theme_mode]
         
-        # 再更新外观模式
+        # 更新 CTk 的外观模式
         ctk.set_appearance_mode(self.theme_mode)
         
         # 更新所有组件颜色
         self.update_theme_colors()
         
+        # 更新菜单颜色
+        self.update_menu_colors()
+        
         # 保存当前主题设置
         self.save_theme_preference()
-        
-        # 更新菜单栏颜色
-        self.menu_bar.configure(fg_color=self.colors["sidebar"])
-        
-        # 更新所有菜单按钮的颜色
-        for widget in self.menu_bar.winfo_children():
-            if isinstance(widget, ctk.CTkFrame):  # 菜单容器
-                for menu in widget.winfo_children():
-                    if isinstance(menu, CustomMenu):
-                        menu.update_colors(self.colors)
 
     def update_theme_colors(self):
         """更新所有组件的颜色"""
@@ -993,15 +1329,38 @@ class TaskManager:
         # 更新标题栏
         self.title_bar.configure(fg_color=self.colors["titlebar"])
         self.title_label.configure(text_color=self.colors["text"])
-        self.min_btn.configure(text_color=self.colors["text"])
-        self.close_btn.configure(text_color=self.colors["text"])
+        self.min_btn.configure(
+            text_color=self.colors["text"],
+            hover_color=self.colors["hover"]
+        )
+        self.close_btn.configure(
+            text_color=self.colors["text"],
+            hover_color="#FF4757"
+        )
         
         # 更新菜单栏
-        self.menu_bar.configure(fg_color=self.colors["sidebar"])
+        self.menu_bar.configure(fg_color=self.colors["menubar"])
+        
         # 更新侧边栏
         self.sidebar.configure(
             fg_color=self.colors["sidebar"],
             border_color=self.colors["border"]
+        )
+        
+        # 更新类别标题
+        self.category_title.configure(text_color=self.colors["text"])
+        
+        # 更新侧边栏切换按钮
+        self.sidebar_toggle_btn.configure(
+            text_color=self.colors["text"],
+            hover_color=self.colors["hover"]
+        )
+        
+        # 更新任务输入框
+        self.task_entry.configure(
+            border_color=self.colors["border"],
+            fg_color=self.colors["sidebar"],
+            text_color=self.colors["text"]
         )
         
         # 更新右侧面板
@@ -1010,18 +1369,19 @@ class TaskManager:
             border_color=self.colors["border"]
         )
         
-        # 更新任务列表区域
-        self.task_frame.configure(
-            fg_color=self.colors["sidebar"]
-        )
+        # 更新任务框架
+        self.task_frame.configure(fg_color=self.colors["sidebar"])
         
-        # 更新任务列表滚动区域
-        self.task_scroll.configure(
-            fg_color=self.colors["bg"]  # 使用主背景色
-        )
+        # 更新任务滚动区域
+        self.task_scroll.configure(fg_color=self.colors["bg"])
         
-        # 更新类别标题
-        self.category_title.configure(text_color=self.colors["text"])
+        # 更新主题按钮
+        self.theme_button.configure(
+            image=self.theme_icons["light" if self.theme_mode == "light" else "dark"],
+            text_color=self.colors["text"],
+            border_color=self.colors["border"],
+            hover_color=self.colors["hover"]
+        )
         
         # 更新类别按钮
         self.update_category_list()
@@ -1032,37 +1392,56 @@ class TaskManager:
         # 如果有任务详情面板，也需要更新它
         if hasattr(self, 'detail_frame') and self.detail_frame.winfo_exists():
             self.detail_frame.configure(fg_color=self.colors["sidebar"])
-            # 更新内容容器的颜色
+            # 更新详情面板中的所有标签和按钮
             for widget in self.detail_frame.winfo_children():
-                if isinstance(widget, ctk.CTkScrollableFrame):
-                    for child in widget.winfo_children():
-                        if isinstance(child, ctk.CTkFrame) and child.cget("fg_color") == self.colors["bg"]:
-                            child.configure(
-                                fg_color=self.colors["bg"],
-                                border_color=self.colors["border"]
-                            )
+                if isinstance(widget, ctk.CTkLabel):
+                    widget.configure(text_color=self.colors["text"])
+                elif isinstance(widget, ctk.CTkButton):
+                    widget.configure(
+                        text_color=self.colors["text"],
+                        hover_color=self.colors["hover"]
+                    )
+
+    def update_menu_colors(self):
+        """更新菜单相关的颜色"""
+        # 更新菜单栏背景
+        self.menu_bar.configure(fg_color=self.colors["menubar"])
+        
+        # 更新所有 CustomMenu 实例的颜色
+        for widget in self.menu_bar.winfo_children():
+            if isinstance(widget, ctk.CTkFrame):  # 菜单容器
+                for menu in widget.winfo_children():
+                    if isinstance(menu, CustomMenu):
+                        menu.update_colors(self.colors)
+                        # 更新菜单按钮颜色
+                        menu.menu_button.configure(
+                            text_color=self.colors["text"],
+                            hover_color=self.colors["hover"],
+                            fg_color="transparent"
+                        )
 
     def save_theme_preference(self):
-        """保存主题设置到配置文件"""
+        """保存主题设置到数据库"""
         try:
-            with open("settings.json", "w") as f:
-                json.dump({"theme": self.theme_mode}, f)
+            self.cursor.execute('''
+                INSERT OR REPLACE INTO settings (key, value)
+                VALUES (?, ?)
+            ''', ('theme', self.theme_mode))
+            self.conn.commit()
         except Exception as e:
-            print(f"Error saving theme preference: {str(e)}")
+            print(f"Error saving theme: {str(e)}")
 
     def load_theme_preference(self):
-        """从��置文件载主题设置"""
+        """从数据库加载主题设置"""
         try:
-            with open("settings.json", "r") as f:
-                settings = json.load(f)
-                self.theme_mode = settings.get("theme", "light")
-                # 先设置颜色方案
-                self.colors = self.theme_colors[self.theme_mode]
-                # 再设置外观模式
-                ctk.set_appearance_mode(self.theme_mode)
-        except:
-            # 如果配置文件不存在或出错，使用默认主题
-            self.theme_mode = "light"
+            self.cursor.execute('SELECT value FROM settings WHERE key = ?', ('theme',))
+            result = self.cursor.fetchone()
+            self.theme_mode = result[0] if result else 'light'
+            self.colors = self.theme_colors[self.theme_mode]
+            ctk.set_appearance_mode(self.theme_mode)
+        except Exception as e:
+            print(f"Error loading theme: {str(e)}")
+            self.theme_mode = 'light'
             self.colors = self.theme_colors[self.theme_mode]
             ctk.set_appearance_mode(self.theme_mode)
 
@@ -1112,7 +1491,7 @@ class TaskManager:
                 json.dump(self.categories, f, ensure_ascii=False, indent=2)
             self.show_message("备份成功", f"数据已备份至{backup_file}")
         except Exception as e:
-            self.show_message("备份失败", f"备份数据时出错：{str(e)}")
+            self.show_message("备份失败", f"备份数据时错：{str(e)}")
 
     def restore_data(self):
         # 实现数据恢复功能
@@ -1130,10 +1509,10 @@ class TaskManager:
                     self.update_task_list()
                 self.show_message("恢复成功", "数据已恢复")
             except Exception as e:
-                self.show_message("复失败", f"恢复据出错：{str(e)}")
+                self.show_message("恢复失败", f"恢复数据时出错：{str(e)}")
 
     def clear_completed(self):
-        # 实现清理已完成任务功能
+        # 实现清已成任务功能
         if not self.show_confirm("确认清理", "确定要清理所有已完成的任务吗？"):
             return
         
@@ -1148,13 +1527,13 @@ class TaskManager:
 
     def show_help(self):
         self.show_message("使用说明", 
-            "BoBoMaker 智��任务清单使用说明：\n\n"
-            "1. 左侧面板显示任务类别\n"
-            "2. 可以添编辑别\n"
+            "BoBoMaker 智能任务清单使用说明：\n\n"
+            "1. 左侧边栏显示任务类别\n"
+            "2. 可以添加编辑类别\n"
             "3. 在输入框中输入任务按回车添加\n"
-            "4. 点击复选标记任务完成状态\n"
+            "4. 点击复选框任务完成状态\n"
             "5. 点击任务可查看详细信息\n"
-            "6. 用菜单栏行更多操作"
+            "6. 使用菜单栏进行更多操作"
         )
 
     def show_about(self):
@@ -1181,7 +1560,7 @@ class TaskManager:
         
         # 确定按钮
         ctk.CTkButton(dialog,
-                      text="确",
+                      text="确定",
                       command=dialog.destroy,
                       width=80).pack(pady=(0, 20))
 
@@ -1191,7 +1570,7 @@ class TaskManager:
         dialog.transient(self.root)
         dialog.grab_set()
         
-        # 先设置大小并居中
+        # 先设大小并居中
         self.center_window(dialog, 300, 150)
         
         # 消息标签
@@ -1229,7 +1608,7 @@ class TaskManager:
     def show_category_menu(self, event, category):
         # 创建右键菜单
         menu = tk.Menu(self.root, tearoff=0)
-        menu.add_command(label="析", 
+        menu.add_command(label="分析", 
                         command=lambda: self.show_category_analysis(category))
         menu.add_command(label="重命名", 
                         command=lambda: self.rename_category(category))
@@ -1264,13 +1643,13 @@ class TaskManager:
         
         # 添加明标签
         ctk.CTkLabel(dialog, 
-                     text="输入新类���名称:",
+                     text="输入新类名称:",
                      font=("微软雅黑", 12)).pack(pady=(15, 5))
         
         # 创建输入框并预填充当前类别名称
         entry = ctk.CTkEntry(dialog, width=350)
         entry.pack(padx=20, pady=5)
-        entry.insert(0, category)  # 预填充当前类别名称
+        entry.insert(0, category)  # 预充当前类称
         entry.select_range(0, 'end')  # 选中所有文本
         entry.focus()  # 获取焦点
         
@@ -1279,7 +1658,7 @@ class TaskManager:
             if new_name and new_name != category and new_name not in self.categories:
                 # 获取所类别的顺序
                 categories = list(self.categories.items())
-                # 到要重命名的类别的索引
+                # 找到当前类别的索引
                 index = next(i for i, (cat, _) in enumerate(categories) if cat == category)
                 # 重命名类别，保持其任务列表不变
                 categories[index] = (new_name, self.categories[category])
@@ -1336,12 +1715,12 @@ class TaskManager:
     # 添加数据分析窗口
     def show_category_analysis(self, category):
         analysis_window = ctk.CTkToplevel(self.root)
-        analysis_window.title(f"类分析 - {category}")
+        analysis_window.title(f"类别分析 - {category}")
         
         # 先设置大小居中
         self.center_window(analysis_window, 600, 400)
         
-        # 获任务数据
+        # 获取任务数据
         tasks = self.categories[category]
         total_tasks = len(tasks)
         completed_tasks = sum(1 for task in tasks if task["completed"])
@@ -1388,21 +1767,21 @@ class TaskManager:
         scroll_frame = ctk.CTkScrollableFrame(daily_frame)
         scroll_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         
-        # 按日期倒序列
+        # 按日倒序列
         for date in sorted(date_stats.keys(), reverse=True):
             count = date_stats[date]
             daily_text = f"{date}: 完成 {count} 个任务"
             ctk.CTkLabel(scroll_frame,
                         text=daily_text,
                         font=("微软雅黑", 12),
-                        anchor="w").pack(fill="x", pady=2)
+                        anchor="w").pack(fill="x", pady=2)  # 移除多余的括号
         
         # 如果没有完成记录
         if not date_stats:
             ctk.CTkLabel(scroll_frame,
-                        text="暂完成记录",
+                        text="暂无完成记录",
                         font=("微软雅黑", 12),
-                        text_color="gray").pack(pady=10)
+                        text_color="gray").pack(pady=10)  # 移除多余的括号
 
     # 添加拖拽相关的方
     def on_button_press(self, event, widget, category):
@@ -1412,7 +1791,7 @@ class TaskManager:
             "y": event.y_root,
             "widget": widget,
             "category": widget._category_name,
-            "start_y": event.y_root  # 记录起始位置
+            "start_y": event.y_root  # 记录初始位置
         }
 
     def create_drag_window(self, widget, text):
@@ -1472,12 +1851,12 @@ class TaskManager:
                 if isinstance(w, ctk.CTkFrame) and w not in self.category_buttons:
                     w.destroy()
             
-            # 确保所有按钮都可见
+            # 确定所有按钮都可见
             for btn in self.category_buttons:
                 if btn != widget and not btn.winfo_viewable():
                     btn.pack(fill="x", pady=2)
             
-            # 在目标位置创建空占位
+            # 在当前位置创建占位
             placeholder_height = widget.winfo_height() + 4
             
             # 遍历所有按钮找到目标位置
@@ -1536,7 +1915,7 @@ class TaskManager:
             if self.drag_window:
                 self.drag_window.destroy()
                 self.drag_window = None
-            # 清除所有临时的空白占位符
+            # 清除所有临时占位符
             for widget in self.category_frame.winfo_children():
                 if isinstance(widget, ctk.CTkFrame):
                     widget.destroy()
@@ -1554,7 +1933,7 @@ class TaskManager:
         # 重新创建和排按钮
         self.category_buttons = []
         
-        # 创建绑定事���的辅助函数
+        # 创建绑定事件的辅助函数
         def create_button_press_handler(btn, cat):
             return lambda e: self.on_button_press(e, btn, cat)
         
@@ -1650,7 +2029,7 @@ class TaskManager:
         
         # 创建输入框并预填充当前任务内容
         entry = ctk.CTkEntry(dialog, width=350)  # 增加输入框宽度
-        entry.pack(padx=20, pady=5)  # 减内边距
+        entry.pack(padx=20, pady=5)  # 减小内边距
         entry.insert(0, task["text"])
         entry.select_range(0, 'end')
         entry.focus()
@@ -1671,7 +2050,7 @@ class TaskManager:
         buttons_container = ctk.CTkFrame(button_frame, fg_color="transparent")
         buttons_container.pack(expand=True)
         
-        # 确按钮
+        # 确定按钮
         ctk.CTkButton(buttons_container,
                       text="确定",
                       command=save_changes,
@@ -1726,85 +2105,431 @@ class TaskManager:
         self.title_bar.pack(fill="x", side="top")
         self.title_bar.pack_propagate(False)
         
+        # 加载并显示图标
+        try:
+            icon_image = Image.open(get_resource_path("logo.png"))
+            # 调整图标大小以适应标题栏
+            icon_image = icon_image.resize((20, 20))
+            
+            # 使用 CTkImage 替代 PhotoImage
+            self.title_icon = ctk.CTkImage(
+                light_image=icon_image,
+                dark_image=icon_image,
+                size=(20, 20)
+            )
+            
+            # 创建显示图标的标签
+            icon_label = ctk.CTkLabel(
+                self.title_bar,
+                text="",
+                image=self.title_icon,
+                width=20,
+                height=20
+            )
+            icon_label.pack(side="left", padx=(10, 5))
+        except Exception as e:
+            print(f"Error loading title bar icon: {str(e)}")
+        
         # 图标和标题
         title_text = f"BoBoMaker 智能任务清单 {self.version}"
-        self.title_label = ctk.CTkLabel(self.title_bar,  # 保存为���例变量以便后续更新
-                              text=title_text,
-                              font=("微软雅黑", 12),
-                              text_color=self.colors["text"])  # 使用主题文字颜色
-        self.title_label.pack(side="left", padx=10)
+        self.title_label = ctk.CTkLabel(self.title_bar,
+                          text=title_text,
+                          font=("微软雅黑", 12),
+                          text_color=self.colors["text"])
+        self.title_label.pack(side="left")
         
         # 窗口控制按钮容器
         btn_container = ctk.CTkFrame(self.title_bar, fg_color="transparent")
         btn_container.pack(side="right", padx=5)
         
         # 最小化按钮
-        self.min_btn = ctk.CTkButton(btn_container,  # 保存为实例变量
+        self.min_btn = ctk.CTkButton(btn_container,
                            text="—",
                            width=35,
                            height=25,
                            command=lambda: self.root.iconify(),
                            fg_color="transparent",
-                           text_color=self.colors["text"],  # 使用主题文字颜色
+                           text_color=self.colors["text"],
                            hover_color=self.colors["hover"])
         self.min_btn.pack(side="left", padx=2)
         
         # 关闭按钮
-        self.close_btn = ctk.CTkButton(btn_container,  # 保存为实例变量
-                             text="×",
-                             width=35,
-                             height=25,
-                             command=self.on_closing,
-                             fg_color="transparent",
-                             text_color=self.colors["text"],  # 使用主题文字颜色
-                             hover_color="#FF4757")
+        self.close_btn = ctk.CTkButton(btn_container,
+                     text="×",  # 使用英文字符 x
+                     width=35,
+                     height=25,
+                     command=self.on_closing,
+                     fg_color="transparent",
+                     text_color=self.colors["text"],
+                     hover_color="#FF4757",
+                     font=("Arial", 14))  # 使用 Arial 字体
         self.close_btn.pack(side="left", padx=2)
         
-        # 绑定拖动事件
+        # 绑定拖动事件 - 只需要绑定开始拖动事件
         self.title_bar.bind("<Button-1>", self.start_move)
-        self.title_bar.bind("<B1-Motion>", self.do_move)
         self.title_label.bind("<Button-1>", self.start_move)
-        self.title_label.bind("<B1-Motion>", self.do_move)
 
     def start_move(self, event):
         """处理窗口拖动开始"""
         try:
-            from ctypes import windll
+            # 取消所有定时器
+            self.cancel_timers()
             
+            # 设置拖动状态
+            self.is_dragging = True
+            
+            # 保存拖动开始时的位置
+            self.drag_start_y = event.y_root
+            
+            from ctypes import windll
             # 获取窗口句柄
             hwnd = windll.user32.GetParent(self.root.winfo_id())
             
-            # 用 PostMessage 代 SendMessage
+            # 使用 Windows API 处理拖动
             windll.user32.ReleaseCapture()
             windll.user32.PostMessageW(hwnd, 0xA1, 2, 0)
             
+            # 绑定鼠标释放事件
+            self.root.bind("<ButtonRelease-1>", self.on_drag_end, add="+")
+            
         except Exception as e:
             print(f"Error in start_move: {str(e)}")
-            # 如果上述方法失败，使用传统方法
-            self.x = event.x
-            self.y = event.y
 
-    def do_move(self, event):
-        """处理窗口拖动"""
-        # 只有传统方法时才需要这个函数
-        if hasattr(self, 'x') and hasattr(self, 'y'):
+    def on_drag_end(self, event):
+        """处理拖动结束"""
+        try:
+            if not self.is_dragging:
+                return
+            
+            # 重置拖动状态
+            self.is_dragging = False
+            
+            # 解绑鼠标释放事件
+            self.root.unbind("<ButtonRelease-1>")
+            
+            # 获取当前窗口位置
+            window_y = self.root.winfo_y()
+            
+            # 如果窗口在顶部区域
+            if window_y < 20:
+                if not self.is_docked:
+                    # 保存原始几何信息
+                    self.original_geometry = self.root.geometry()
+                    # 设置停靠状态
+                    self.is_docked = True
+                    # 吸附到顶部
+                    x = self.root.winfo_x()
+                    self.root.wm_geometry(f"+{x}+0")
+                    # 延迟启动自动隐藏
+                    self.root.after(500, self.schedule_hide)
+                    # 绑定鼠标事件
+                    self.root.bind("<Enter>", self.on_mouse_enter)
+                    self.root.bind("<Leave>", self.on_mouse_leave)
+            else:
+                # 如果窗口离开顶部区域且当前是停靠状态
+                if self.is_docked:
+                    self.undock_window()
+                    
+        except Exception as e:
+            print(f"Error in on_drag_end: {str(e)}")
+        finally:
+            self.is_dragging = False
+
+    def undock_window(self):
+        """取消窗口停靠状态"""
+        if not self.is_docked:
+            return
+        
+        self.is_docked = False
+        self.cancel_timers()
+        
+        if self.original_geometry:
+            # 从原始几何信息中获取宽度和高度
             try:
-                deltax = event.x - self.x
-                deltay = event.y - self.y
-                x = self.root.winfo_x() + deltax
-                y = self.root.winfo_y() + deltay
-                self.root.geometry(f"+{x}+{y}")
-            except Exception as e:
-                print(f"Error in do_move: {str(e)}")
+                width, height = map(int, self.original_geometry.split('+')[0].split('x'))
+                x = self.root.winfo_x()
+                y = self.root.winfo_y()
+                # 保持当前x位置，使用原始宽度和高度
+                self.root.geometry(f"{width}x{height}+{x}+{y}")
+            except:
+                # 如果解析失败，直接使用原始几何信息
+                self.root.geometry(self.original_geometry)
+            
+            self.original_geometry = None
+        
+        # 解绑鼠标事件
+        self.root.unbind("<Enter>")
+        self.root.unbind("<Leave>")
 
-    # 将 create_menu_bar 方法移动到类内部
+    def check_dock_position(self):
+        """检查窗口位置并决定是否停靠"""
+        # 如果正在拖动，不进行停靠检查
+        if self.is_dragging:
+            return
+        
+        if not hasattr(self, 'checking_position'):
+            self.checking_position = False
+        
+        if self.checking_position:
+            return
+        
+        self.checking_position = True
+        try:
+            # 获取窗口当前位置
+            x = self.root.winfo_x()
+            y = self.root.winfo_y()
+            
+            # 如果窗口靠近顶部（小于20像素）且未停靠
+            if y < 20 and not self.is_docked:
+                # 保存原始位置和大小
+                self.original_geometry = self.root.geometry()
+                # 设置停靠标志
+                self.is_docked = True
+                # 延迟启动自动隐藏
+                self.schedule_hide()
+        finally:
+            self.checking_position = False
+
+    def schedule_hide(self):
+        """计划隐藏窗口"""
+        if not self.is_docked:
+            return
+        
+        # 取消所有现有定时器
+        self.cancel_timers()
+        
+        # 设置新的隐藏定时器
+        self.hide_timer = self.root.after(500, self.hide_window)
+
+    def hide_window(self):
+        """隐藏窗口，只留下一小部分"""
+        if not self.is_docked:
+            return
+            
+        # 获取当前窗口位置
+        x = self.root.winfo_x()
+        
+        # 保存完整状态的位置和大小
+        if not self.original_geometry:
+            self.original_geometry = self.root.geometry()
+        
+        # 使用固定宽度
+        self.root.geometry(f"{self.dock_width}x{self.dock_height}+{x}+0")
+
+    def show_window(self):
+        """显示完整窗口"""
+        if not self.is_docked or not self.original_geometry:
+            return
+        
+        try:
+            # 获取当前位置
+            current_x = self.root.winfo_x()
+            
+            # 从原始几何信息中获取宽度和高度
+            width, height = map(int, self.original_geometry.split('+')[0].split('x'))
+            
+            # 使用当前x位置和原始宽度、高度
+            self.root.geometry(f"{width}x{height}+{current_x}+0")
+            
+            # 确保窗口大小不超过屏幕
+            screen_width = self.root.winfo_screenwidth()
+            if current_x + width > screen_width:
+                # 如果窗口超出屏幕右边界，调整x坐标
+                new_x = max(0, screen_width - width)
+                self.root.geometry(f"{width}x{height}+{new_x}+0")
+            
+            # 重新绑定鼠标离开事件
+            self.root.bind("<Leave>", self.on_mouse_leave)
+            
+        except Exception as e:
+            print(f"Error restoring window: {str(e)}")
+            # 如果出错，尝试直接使用原始几何信息
+            self.root.geometry(self.original_geometry)
+
+    def on_mouse_enter(self, event):
+        """鼠标进入窗口区域"""
+        if self.is_docked:
+            # 取消任何正在进行的隐藏计时
+            self.cancel_timers()
+            
+            # 如果窗口当前是隐藏状态，则显示
+            if self.root.winfo_height() <= self.dock_height + 5:
+                self.show_window()
+
+    def on_mouse_leave(self, event):
+        """鼠标离开窗口区域"""
+        if self.is_docked:
+            # 检查鼠标是否真的离开了窗口区域
+            x = self.root.winfo_pointerx()
+            y = self.root.winfo_pointery()
+            win_x = self.root.winfo_x()
+            win_y = self.root.winfo_y()
+            win_width = self.root.winfo_width()
+            win_height = self.root.winfo_height()
+            
+            # 添加一点检测余量
+            margin = 2
+            if not (win_x - margin <= x <= win_x + win_width + margin and 
+                    win_y - margin <= y <= win_y + win_height + margin):
+                self.schedule_hide()
+
+    def cancel_timers(self):
+        """取消所有定时器"""
+        for timer_attr in ['hide_timer', 'show_timer']:
+            if hasattr(self, timer_attr) and getattr(self, timer_attr):
+                self.root.after_cancel(getattr(self, timer_attr))
+                setattr(self, timer_attr, None)
+
+    def on_closing(self):
+        """处理窗口关闭事件"""
+        try:
+            self.cancel_timers()  # 确保清理所有定时器
+            self.save_tasks()
+            if hasattr(self, 'conn'):
+                self.conn.close()
+            self.root.quit()
+        except:
+            self.root.quit()
+
+    def minimize_window(self):
+        """处理最小化事件"""
+        self.root.iconify()
+
+    def on_map(self, event):
+        """处理窗口恢复事件"""
+        pass  # 不需要特殊处理
+
+    def on_unmap(self, event):
+        """处理窗口最小化事件"""
+        pass  # 不需要特殊处理
+
+    def setup_window(self):
+        """设置窗样式和属性"""
+        pass  # 不再需要这个方法
+
+    # 添加新方法来处理侧边栏的展开和收起
+    def toggle_sidebar(self):
+        # 确保所有必要的属性都已初始化
+        if not hasattr(self, 'is_animating'):
+            self.is_animating = False
+        if not hasattr(self, 'sidebar_width'):
+            self.sidebar_width = 120
+        if not hasattr(self, 'is_expanded'):
+            self.is_expanded = True
+        if not hasattr(self, 'max_width'):
+            self.max_width = 120
+        
+        if self.is_animating:  # 如果正在动画中，忽略点击
+            return
+        
+        self.is_animating = True
+        current_width = self.sidebar.winfo_width()
+        
+        if self.is_expanded:  # 使用状态标志而不是宽度判断
+            # 保存当前宽度用于恢复，但不超过最大宽度
+            self.sidebar_width = min(current_width, self.max_width)
+            self.is_expanded = False  # 更新状态
+            
+            # 立即隐藏内容避免拖影
+            self.category_title.pack_forget()
+            self.category_frame.pack_forget()
+            
+            # 更新按钮文本并保持在原位
+            self.sidebar_toggle_btn.configure(text="▶")
+            
+            # 开始收起动画
+            self.animate_sidebar(current_width, 30, False)
+        else:
+            self.is_expanded = True  # 更新状态
+            # 确保展开宽度在有效范围内
+            if self.sidebar_width < 120:
+                self.sidebar_width = 120
+            elif self.sidebar_width > self.max_width:
+                self.sidebar_width = self.max_width
+            
+            # 开始展开动画前先调整按钮
+            self.sidebar_toggle_btn.configure(text="◀")
+            self.sidebar_toggle_btn.pack(in_=self.title_bar_frame, side="right", padx=5)
+            
+            # 开始展开动画
+            self.animate_sidebar(30, self.sidebar_width, True)
+
+    def animate_sidebar(self, start_width, end_width, is_expanding):
+        """处理侧边栏动画效果"""
+        if not hasattr(self, 'animation_id'):
+            self.animation_id = None
+        
+        # 如果有正在进行的动画，取消它
+        if self.animation_id:
+            self.root.after_cancel(self.animation_id)
+            self.animation_id = None
+        
+        # 确保结束宽度不超过最大宽度
+        if is_expanding:
+            end_width = min(end_width, self.max_width)
+        
+        duration = 200
+        steps = 15
+        step_time = duration / steps
+        width_step = (end_width - start_width) / steps
+        
+        def update_width(current_step):
+            if current_step < steps:
+                try:
+                    new_width = int(start_width + (width_step * current_step))
+                    # 确保新宽度不超过最大宽度
+                    new_width = min(new_width, self.max_width)
+                    self.sidebar.configure(width=new_width)
+                    
+                    # 如果是展开动画的最后几步，开始显示内容
+                    if is_expanding and current_step > steps * 0.8:
+                        if not self.category_title.winfo_ismapped():
+                            self.category_title.pack(in_=self.title_bar_frame, side="left", padx=10)
+                        if not self.category_frame.winfo_ismapped():
+                            self.category_frame.pack(fill="both", expand=True, padx=10)
+                    
+                    # 保存动画ID以便可以取消
+                    self.animation_id = self.root.after(int(step_time), 
+                                                          lambda: update_width(current_step + 1))
+                except Exception as e:
+                    print(f"Animation error: {str(e)}")
+                    self.cleanup_animation()
+            else:
+                try:
+                    # 确保最终宽度精确且不超过最大宽度
+                    final_width = min(end_width, self.max_width)
+                    self.sidebar.configure(width=final_width)
+                    
+                    # 如果是展开动画，确保内容完全显示
+                    if is_expanding:
+                        if not self.category_title.winfo_ismapped():
+                            self.category_title.pack(in_=self.title_bar_frame, side="left", padx=10)
+                        if not self.category_frame.winfo_ismapped():
+                            self.category_frame.pack(fill="both", expand=True, padx=10)
+                    
+                    # 清理动画状态
+                    self.cleanup_animation()
+                except Exception as e:
+                    print(f"Animation completion error: {str(e)}")
+                    self.cleanup_animation()
+        
+        # 开始动画
+        update_width(0)
+
+    def cleanup_animation(self):
+        """清理动画相关的状态"""
+        self.is_animating = False
+        if hasattr(self, 'animation_id') and self.animation_id:
+            self.root.after_cancel(self.animation_id)
+            self.animation_id = None
+
     def create_menu_bar(self):
         # 创建菜单栏容器
         self.menu_bar = ctk.CTkFrame(
             self.main_frame,
             height=30,
-            fg_color=self.colors["sidebar"],  # 使用侧边栏颜色
-            border_width=1,
+            fg_color=self.colors["sidebar"],
+            border_width=0,
             border_color=self.colors["border"]
         )
         self.menu_bar.pack(fill="x", side="top")
@@ -1868,36 +2593,33 @@ class TaskManager:
             self.colors
         )
         help_menu.pack(side="left", padx=2)
-
-    def on_closing(self):
-        """处理窗口关闭事件"""
-        try:
-            self.save_tasks()  # 保存数据
-            self.root.quit()   # 退出程序
-        except:
-            self.root.quit()   # 如果保存失败也要确保程序能够退出
-
-    def minimize_window(self):
-        """处理最小化事件"""
-        self.root.iconify()
-
-    def on_map(self, event):
-        """处理窗口恢复事件"""
-        pass  # 不需要特殊处理
-
-    def on_unmap(self, event):
-        """处理窗口最小化事件"""
-        pass  # 不需要特殊处理
-
-    def setup_window(self):
-        """设置窗样式和属性"""
-        pass  # 不再需要这个方法
+        
+        # 在右侧添加主题切换按钮
+        theme_container = ctk.CTkFrame(
+            self.menu_bar,
+            fg_color="transparent"
+        )
+        theme_container.pack(side="right", padx=10)
+        
+        # 主题切换按钮
+        self.theme_button = ctk.CTkButton(
+            theme_container,
+            text="",  # 不使用文本
+            image=self.theme_icons["light" if self.theme_mode == "light" else "dark"],
+            width=32,
+            height=32,
+            corner_radius=8,
+            fg_color="transparent",
+            text_color=self.colors["text"],
+            hover_color=self.colors["hover"],
+            border_width=1,
+            border_color=self.colors["border"],
+            command=self.toggle_theme
+        )
+        self.theme_button.pack(side="right")
 
 if __name__ == "__main__":
-    try:
-        root = ctk.CTk()
-        app = TaskManager(root)
-        app.center_window(root, 900, 600)
-        root.mainloop()
-    except KeyboardInterrupt:
-        root.quit() 
+    root = ctk.CTk()
+    app = TaskManager(root)
+    app.center_window(root, 900, 600)
+    root.mainloop()
